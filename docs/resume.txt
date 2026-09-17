@@ -1,0 +1,19 @@
+Veer Verma
+Email: you@example.com
+
+Summary
+Aspiring software engineer with a strong interest in generative AI and backend development. Currently learning to build applications using large language models, focusing on retrieval-augmented generation (RAG) systems, Python, and local model deployment with Ollama.
+
+Skills
+Programming Languages: Python, JavaScript
+Tools and Technologies: Git, Ollama, numpy, virtual environments (venv), pip
+AI/ML Concepts: Embeddings, vector similarity search, prompt engineering, RAG pipelines, LLM tool use
+
+Projects
+LocalRAG - Built a fully local retrieval-augmented generation pipeline in Python using Ollama for both embeddings (nomic-embed-text) and text generation (llama3.2:3b). The system reads documents from a folder (supporting .txt and .pdf files), splits them into overlapping chunks, converts each chunk into a vector embedding, and retrieves the most relevant chunks using cosine similarity before generating a grounded answer to a user's question. Implemented source citation so answers reference the exact file they came from, and added error handling for unreadable files and oversized chunks during ingestion.
+
+Education
+Currently self-studying generative AI engineering fundamentals, including embeddings, vector search, prompt design, and agentic tool-use patterns.
+
+Interests
+Building practical AI tools, learning how LLM-based systems work under the hood rather than only using high-level frameworks.

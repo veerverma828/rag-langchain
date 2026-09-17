@@ -1,0 +1,11 @@
+Python Basics Notes
+
+Python is a high-level, interpreted programming language known for its readable syntax. Variables in Python do not need explicit type declarations; the type is inferred from the assigned value.
+
+Python uses indentation (whitespace) to define code blocks, instead of curly braces like many other languages. This makes the code visually structured but also means indentation errors can break a program.
+
+Common built-in data types in Python include integers, floats, strings, lists, tuples, dictionaries, and sets. Lists are ordered and mutable, meaning you can change their contents after creation. Tuples are ordered but immutable. Dictionaries store key-value pairs and are useful for fast lookups by key.
+
+Functions in Python are defined using the def keyword. Functions can accept parameters, return values, and even accept a variable number of arguments using *args and **kwargs.
+
+Python has a large standard library and an even larger ecosystem of third-party packages available through pip, the package installer. Virtual environments, created with venv, allow developers to isolate project dependencies so different projects can use different package versions without conflicts.

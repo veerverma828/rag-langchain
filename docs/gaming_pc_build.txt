@@ -1,0 +1,17 @@
+Gaming PC Build Notes
+
+This document covers a mid-range gaming PC build for 1440p gaming at high settings.
+
+CPU: AMD Ryzen 7 7800X3D - chosen for its large 3D V-Cache, which significantly boosts gaming frame rates compared to standard Ryzen chips. Pairs well with most modern GPUs without bottlenecking.
+
+GPU: NVIDIA RTX 4070 Super - offers strong 1440p performance, supports ray tracing and DLSS 3 frame generation, and is more power efficient than the previous generation's equivalent tier.
+
+RAM: 32GB DDR5 6000MHz CL30 - 32GB is recommended over 16GB for modern games and multitasking (streaming, Discord, background apps). DDR5 6000MHz is considered the sweet spot for AMD's Infinity Fabric.
+
+Storage: 1TB NVMe Gen4 SSD as the primary drive for the OS and frequently played games, with a secondary 2TB SATA SSD for a larger game library.
+
+Cooling: A 240mm AIO liquid cooler is sufficient for the 7800X3D since it does not run extremely hot compared to Intel's high-end chips.
+
+Power Supply: 750W 80+ Gold rated PSU, leaving headroom for future GPU upgrades.
+
+Case airflow matters as much as component choice - at least two intake fans and one exhaust fan is recommended to keep thermals in check during long gaming sessions.

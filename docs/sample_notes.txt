@@ -1,0 +1,15 @@
+Retrieval-Augmented Generation (RAG) Notes
+
+RAG is a technique that combines information retrieval with text generation. Instead of relying only on what a language model learned during training, RAG lets the model look up relevant information from an external source before answering a question.
+
+The RAG pipeline has three main stages: ingestion, retrieval, and generation. In the ingestion stage, documents are split into small chunks and converted into embeddings, which are vector representations of meaning. These embeddings are stored in a vector database.
+
+In the retrieval stage, when a user asks a question, the question itself is converted into an embedding using the same embedding model. The system then searches the vector database for chunks whose embeddings are most similar to the question's embedding. This is usually done using cosine similarity or a related distance metric.
+
+In the generation stage, the retrieved chunks are combined with the original question into a single prompt. This prompt is sent to a large language model, which generates a final answer grounded in the retrieved text. This reduces hallucination because the model has actual source material to work from instead of guessing from memory.
+
+Common vector databases used in RAG systems include FAISS, Chroma, Pinecone, and Weaviate. Embedding models convert text into fixed-length numeric vectors, typically ranging from 384 to 1536 dimensions depending on the model.
+
+Chunking strategy matters a lot in RAG systems. If chunks are too large, irrelevant text gets mixed in and wastes context space. If chunks are too small, important context might get split across multiple chunks and lose coherence. A common starting point is chunks of 200 to 500 words with some overlap between consecutive chunks to preserve context across boundaries.
+
+RAG is widely used in customer support bots, internal company knowledge search, legal and medical document search, and coding assistants that reference private codebases.
