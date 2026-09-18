@@ -1,5 +1,8 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 .env
 chroma_db/
+record_manager.db
+uploaded_docs/

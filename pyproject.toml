@@ -1,0 +1,18 @@
+[project]
+name = "rag-langchain"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "Veer Verma", email = "veerverma828@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "chromadb>=1.5.9",
+    "docx2txt>=0.9",
+    "langchain>=1.4.1",
+    "langchain-chroma>=1.1.0",
+    "langchain-community>=0.4.2",
+    "langchain-ollama>=1.1.0",
+    "pypdf>=6.19.0",
+    "streamlit>=1.64.0",
+]

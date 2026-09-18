@@ -1,10 +1,11 @@
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_chroma import Chroma
-from langchain_unstructured import UnstructuredLoader
+from langchain_community.document_loaders import DirectoryLoader, TextLoader, PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
-import glob
+from langchain_classic.indexes import SQLRecordManager, index
 
 # must match the model used to build the store
 embeddings = OllamaEmbeddings(model="nomic-embed-text")
@@ -26,45 +27,61 @@ Answer:""")
 def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
-# NEW: builds (or rebuilds) the vector store from a given folder - lets us point the app
-# at any folder, and re-run this to pick up new/changed files (same idea as the manual
-# project's build_index() + 'r' reload).
-def build_store(folder):
-    file_paths = glob.glob(f"{folder}/**/*.txt", recursive=True) + glob.glob(f"{folder}/**/*.pdf", recursive=True)
-    loader = UnstructuredLoader(file_path=file_paths, strategy="fast", chunking_strategy="by_title")
-    chunks = loader.load()
-    print(f"Loaded {len(chunks)} chunks from {folder}")
-    return Chroma.from_documents(documents=chunks, embedding=embeddings, persist_directory="chroma_db")
+# The vector store itself - created once, reused across runs. Chroma will create an empty
+# store here on first run, and load the existing one on every run after that.
+vector_store = Chroma(persist_directory="chroma_db", embedding_function=embeddings)
 
-# NEW: rebuilds the retriever + chain after a (re)build, so they use the fresh vector store
-def build_chain(vector_store):
-    retriever = vector_store.as_retriever(search_kwargs={"k": 2})  # k=2 -> top 2 relevant chunks
-    chain = (
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
-        | prompt
-        | llm
-        | StrOutputParser()
+# NEW: the record manager is LangChain's official way to track "what have I already indexed,
+# and what does its content look like right now" - it keeps a small SQLite database of
+# content hashes per document, so re-syncing can tell exactly what's new/changed/unchanged.
+record_manager = SQLRecordManager(
+    namespace="rag_chain/docs",
+    db_url="sqlite:///record_manager.db",
+)
+record_manager.create_schema()  # safe to call every run - does nothing if already set up
+
+# UPDATED: loads + chunks the folder, then syncs with the vector store via the record
+# manager instead of wiping and rebuilding. cleanup="full" means: anything in the vector
+# store that ISN'T in this folder anymore (e.g. a deleted file) gets removed too, since we
+# always pass the complete current set of chunks for the folder.
+def sync_store(folder):
+    txt_docs = DirectoryLoader(folder, glob="**/*.txt", loader_cls=TextLoader, loader_kwargs={"encoding": "utf-8"}).load()
+    pdf_docs = DirectoryLoader(folder, glob="**/*.pdf", loader_cls=PyPDFLoader).load()
+    all_docs = txt_docs + pdf_docs
+
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    chunks = splitter.split_documents(all_docs)
+
+    result = index(
+        chunks,
+        record_manager,
+        vector_store,
+        cleanup="full",
+        source_id_key="source",
     )
-    return chain
+    print(f"Synced {folder}: {result}")
 
-# NEW: ask which folder to index, same 's' shortcut as the manual project
+retriever = vector_store.as_retriever(search_kwargs={"k": 2})  # k=2 -> top 2 relevant chunks
+chain = (
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
+
+# NEW: ask which folder to sync, same 's' shortcut as before. This always runs, but is now
+# cheap - unchanged files get skipped automatically by the record manager, so there's no
+# need for a manual 'r' reload command anymore.
 docs_folder = input("Enter folder to search (or 's' for docs/): ").strip()
 if docs_folder.lower() == "s":
     docs_folder = "docs"
 
-vector_store = build_store(docs_folder)
-chain = build_chain(vector_store)
+sync_store(docs_folder)
 
-print("RAG ready. Type your question ('r' to rescan folder, 'exit' to quit).")
+print("RAG ready. Type your question ('exit' to quit).")
 while True:
     question = input("\nYou: ")
     if question.lower() == "exit":
         break
-    # NEW: 'r' rebuilds the store from the same folder, picking up new/changed files
-    if question.lower() == "r":
-        vector_store = build_store(docs_folder)
-        chain = build_chain(vector_store)
-        print("Reloaded.")
-        continue
     answer = chain.invoke(question)  # runs the whole chain
     print(f"\nAI: {answer}")
