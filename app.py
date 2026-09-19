@@ -1,12 +1,15 @@
 import streamlit as st
 import os
 import time
+import datetime
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import TextLoader, PyPDFLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.tools import tool
+from langchain_core.messages import ToolMessage, AIMessage
 from langchain_classic.indexes import SQLRecordManager, index
 
 st.set_page_config(page_title="Local RAG (LangChain)", page_icon="🔗")
@@ -21,6 +24,18 @@ st.markdown("""
     overflow: visible;
     text-overflow: clip;
     word-wrap: break-word;
+}
+div[data-testid="stChatInput"] > div:first-child,
+div[data-testid="stSelectbox"] [role="group"] {
+    min-height: 3.6rem;
+    border-radius: 12px !important;
+    border: 1px solid rgba(250, 250, 250, 0.15) !important;
+    display: flex;
+    align-items: center;
+}
+div[data-testid="stSelectbox"] [role="group"],
+div[data-testid="stChatInput"] textarea {
+    font-size: 0.9rem !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -48,10 +63,109 @@ def get_record_manager():
     rm.create_schema()
     return rm
 
+# NEW: a small, separate model dedicated to deciding WHICH tool (if any) a question
+# needs. qwen2.5-coder (the main answer-writing model) doesn't reliably emit structured
+# tool calls through Ollama - llama3.2:3b does, so it's used only for this routing
+# decision. The actual final answer is still written by the bigger qwen2.5-coder model,
+# using whatever the chosen tool returned - small model decides, big model writes.
+@st.cache_resource
+def get_agent_llm():
+    return ChatOllama(model="llama3.2:3b", temperature=0)
+
 embeddings = get_embeddings()
 llm = get_llm()
 vector_store = get_vector_store()
 record_manager = get_record_manager()
+agent_llm_base = get_agent_llm()
+
+# NEW: tools the agent can choose to call. calculate/get_current_time are executed
+# directly through these; search_documents is only defined so the model can see and
+# select it - its actual execution reuses similarity_search_with_score() further down,
+# so the citation scores are available for the UI (see handle_question).
+@tool
+def calculate(expression: str) -> str:
+    """Evaluate a NUMERIC math expression using only digits and +-*/(). Only
+    use this for arithmetic questions. Do NOT use it for facts, names, or
+    anything that isn't a plain math calculation."""
+    allowed = set("0123456789+-*/(). ")
+    if not set(expression) <= allowed:
+        return (f"TOOL ERROR: '{expression}' is not a valid math expression "
+                f"(contains non-numeric characters). This tool only accepts "
+                f"digits and + - * / ( ). Do not retry with a different, "
+                f"non-numeric expression - this question is not a math problem.")
+    try:
+        return str(eval(expression))
+    except Exception as e:
+        return f"TOOL ERROR: could not evaluate '{expression}': {e}"
+
+@tool
+def get_current_time() -> str:
+    """Get the current date and time."""
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+@tool
+def search_documents(query: str) -> str:
+    """Search the user's own uploaded/synced documents for information
+    relevant to the query. Use this whenever the question could be about the
+    user's own documents rather than general knowledge, math, or the time."""
+    results = vector_store.similarity_search(query, k=2)
+    if not results:
+        return "No relevant documents found."
+    return "\n\n".join(doc.page_content for doc in results)
+
+agent_tools = [calculate, get_current_time, search_documents]
+agent_tools_by_name = {t.name: t for t in agent_tools}
+agent_llm = agent_llm_base.bind_tools(agent_tools)
+
+AGENT_SYSTEM_PROMPT = (
+    "You have access to three tools: 'calculate' (arithmetic on numbers "
+    "only), 'get_current_time' (current date/time only), and "
+    "'search_documents' (search the user's own documents). "
+    "For general knowledge not covered by these - capitals, common facts, "
+    "definitions - call NO tool and answer directly. "
+    "Calling a tool for a question it wasn't built for is wrong even if you "
+    "end up guessing the right answer anyway. "
+    "If a tool result starts with 'TOOL ERROR', do not guess or make up an "
+    "answer - tell the user the tool failed and why."
+)
+
+# few-shot examples teach the routing decision far more reliably than the
+# instruction text alone, especially for a small model like llama3.2:3b
+AGENT_FEW_SHOT = [
+    {"role": "user", "content": "What is 12 times 8?"},
+    AIMessage(content="", tool_calls=[
+        {"name": "calculate", "args": {"expression": "12*8"}, "id": "ex1"}
+    ]),
+    ToolMessage(content="96", tool_call_id="ex1"),
+    AIMessage(content="12 times 8 is 96."),
+
+    {"role": "user", "content": "What is the capital of France?"},
+    AIMessage(content="The capital of France is Paris."),
+
+    {"role": "user", "content": "What's today's date?"},
+    AIMessage(content="", tool_calls=[
+        {"name": "get_current_time", "args": {}, "id": "ex2"}
+    ]),
+    ToolMessage(content="2026-01-15 10:00:00", tool_call_id="ex2"),
+    AIMessage(content="Today's date is 2026-01-15."),
+
+    {"role": "user", "content": "What is the capital of Italy?"},
+    AIMessage(content="The capital of Italy is Rome."),
+
+    {"role": "user", "content": "What CPU does my gaming PC build use?"},
+    AIMessage(content="", tool_calls=[
+        {"name": "search_documents", "args": {"query": "CPU gaming PC build"}, "id": "ex3"}
+    ]),
+    ToolMessage(content="CPU: AMD Ryzen 7 7800X3D", tool_call_id="ex3"),
+    AIMessage(content="Your gaming PC build uses an AMD Ryzen 7 7800X3D."),
+
+    {"role": "user", "content": "What does my resume say about my skills?"},
+    AIMessage(content="", tool_calls=[
+        {"name": "search_documents", "args": {"query": "skills"}, "id": "ex4"}
+    ]),
+    ToolMessage(content="Skills: Python, SQL, Excel", tool_call_id="ex4"),
+    AIMessage(content="Your resume lists Python, SQL, and Excel as skills."),
+]
 
 prompt = ChatPromptTemplate.from_template("""Answer the question using ONLY the context below. If the answer isn't in the context, say you don't know.
 
@@ -109,7 +223,7 @@ def sync_store(folder, progress_callback=None):
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
     chunks = splitter.split_documents(all_docs)
 
-    result = index(chunks, record_manager, vector_store, cleanup="full", source_id_key="source")
+    result = index(chunks, record_manager, vector_store, cleanup="full", source_id_key="source", key_encoder="blake2b")
     return result, skipped
 
 generation_chain = prompt | llm | StrOutputParser()
@@ -122,18 +236,14 @@ def _clean_suggestion_line(line):
     # strip common list prefixes: "1. ", "1) ", "- ", "• "
     return re.sub(r"^(\d+[\.\)]\s*|[-•]\s*)", "", line).strip()
 
-# NEW: renders the actual clickable chips into a placeholder - called exactly once per
-# script run (never repeatedly), which is what keeps this safe/stable in Streamlit.
+# UPDATED: renders the final suggestions as a plain static list (same look as while
+# streaming), not clickable buttons - no more box-styled chips.
 def render_suggestion_buttons(container, questions):
     if not questions:
         return
     with container:
         st.caption("Try asking:")
-        cols = st.columns(len(questions))
-        for i, (col, q) in enumerate(zip(cols, questions)):
-            if col.button(q, key=f"suggest_{i}_{q}"):
-                st.session_state.pending_question = q
-                st.rerun()
+        st.markdown("\n\n".join(f"• {q}" for q in questions))
 
 # UPDATED: streams the LLM's response token-by-token instead of waiting for the full
 # reply, and renders each completed question as its own chip immediately (as soon as a
@@ -169,26 +279,26 @@ def generate_suggested_questions(container):
             st.markdown(lines_md)
 
     for chunk in llm.stream(
-        f"Based on this content, suggest exactly 4 short example questions a user might ask "
+        f"Based on this content, suggest exactly 2 short example questions a user might ask "
         f"(one per line, no numbering, no quotes):\n\n{sample_text}"
     ):
         buffer += chunk.content
-        while "\n" in buffer and len(collected) < 4:
+        while "\n" in buffer and len(collected) < 2:
             line, buffer = buffer.split("\n", 1)
             line = _clean_suggestion_line(line)
             if line:
                 collected.append(line)
-        if len(collected) >= 4:
+        if len(collected) >= 2:
             break
         render_progress()  # called every chunk, so the active line grows word by word
 
-    if len(collected) < 4:
+    if len(collected) < 2:
         line = _clean_suggestion_line(buffer)
         if line:
             collected.append(line)
 
-    render_suggestion_buttons(container, collected[:4])
-    return collected[:4]
+    render_suggestion_buttons(container, collected[:2])
+    return collected[:2]
 
 if "history" not in st.session_state:
     st.session_state.history = []  # list of (question, answer, sources, scored, elapsed) tuples
@@ -198,37 +308,106 @@ if "history" not in st.session_state:
 if "suggested_questions" not in st.session_state:
     st.session_state.suggested_questions = None
 
-# NEW: the actual "ask and answer" logic pulled into one function, so both the chat input
-# and the suggested-question buttons can trigger the exact same flow.
+# NEW: shared logic for the "search documents" path - used by both Auto mode (when the
+# agent picks this tool) and the explicit "Document Search" mode (which skips the
+# decision step entirely and always searches).
+def run_document_search(question, query):
+    # Chroma's default score is a DISTANCE, not a similarity - LOWER = more relevant.
+    scored = vector_store.similarity_search_with_score(query, k=2)
+    retrieved_docs = [doc for doc, score in scored]
+    cite_sources = sorted(set(doc.metadata["source"] for doc in retrieved_docs))
+    context = format_docs(retrieved_docs)
+    answer = st.write_stream(generation_chain.stream({"context": context, "question": question}))
+    if "don't know" in answer.lower():
+        cite_sources = []
+    else:
+        for doc, score in scored:
+            with st.container(border=True):
+                st.caption(f"📄 {doc.metadata['source']}")
+                st.markdown(f"> {doc.page_content[:250]}...")
+    return answer, cite_sources, scored
+
+# NEW: shared logic for running calculate/get_current_time and phrasing the raw result
+# into a natural sentence via the main (bigger) LLM.
+def run_tool(tool_name, args, question):
+    tool_fn = agent_tools_by_name[tool_name]
+    result = tool_fn.invoke(args)
+    if result.startswith("TOOL ERROR"):
+        # don't trust the LLM to notice/respect this itself - surface it directly
+        st.error(f"Tool failed: {result}")
+        return f"Tool failed: {result}"
+    phrase_prompt = (
+        f"Question: {question}\nTool result: {result}\n\n"
+        f"Answer the question naturally using this result, in one short sentence."
+    )
+    return st.write_stream(llm.stream(phrase_prompt))
+
+MODE_AUTO = "Auto"
+MODE_DOCS = "Documents"
+MODE_CALC = "Calculator"
+MODE_TIME = "Time"
+MODE_DIRECT = "Direct"
+
+# UPDATED: the mode picker (below, near the chat input) lets you force a specific path
+# instead of trusting the small agent_llm's routing decision - useful since it sometimes
+# over-triggers a tool for general-knowledge questions (a known small-model limitation).
+# "Auto" keeps the original agent-decides behavior.
 def handle_question(question):
     with st.chat_message("user"):
         st.write(question)
     with st.chat_message("assistant"):
         start = time.time()
-        # Chroma's default score is a DISTANCE, not a similarity - LOWER means more relevant.
-        scored = vector_store.similarity_search_with_score(question, k=2)
-        retrieved_docs = [doc for doc, score in scored]
-        cite_sources = sorted(set(doc.metadata["source"] for doc in retrieved_docs))
-        context = format_docs(retrieved_docs)
+        cite_sources = []
+        scored = []
+        mode = st.session_state.get("mode", MODE_AUTO)
 
-        answer = st.write_stream(generation_chain.stream({"context": context, "question": question}))
+        if mode == MODE_DIRECT:
+            answer = st.write_stream(llm.stream(question))
+
+        elif mode == MODE_DOCS:
+            answer, cite_sources, scored = run_document_search(question, question)
+
+        elif mode == MODE_CALC:
+            # only offer the ONE tool - removes the ambiguity that causes over-triggering,
+            # since there's nothing else for the model to (wrongly) pick instead
+            calc_only_llm = agent_llm_base.bind_tools([calculate])
+            decision = calc_only_llm.invoke([{"role": "user", "content": question}])
+            if decision.tool_calls:
+                call = decision.tool_calls[0]
+                answer = run_tool(call["name"], call["args"], question)
+            else:
+                st.warning("Couldn't find a math expression in that question.")
+                answer = "Couldn't find a math expression in that question."
+
+        elif mode == MODE_TIME:
+            answer = run_tool("get_current_time", {}, question)
+
+        else:  # MODE_AUTO
+            agent_messages = [
+                {"role": "system", "content": AGENT_SYSTEM_PROMPT},
+                *AGENT_FEW_SHOT,
+                {"role": "user", "content": question},
+            ]
+            decision = agent_llm.invoke(agent_messages)
+
+            if not decision.tool_calls:
+                # no tool needed - general knowledge question, answer directly
+                answer = st.write_stream(llm.stream(question))
+            else:
+                call = decision.tool_calls[0]  # keep it simple: act on the first request only
+                if call["name"] == "search_documents":
+                    answer, cite_sources, scored = run_document_search(question, call["args"]["query"])
+                else:
+                    answer = run_tool(call["name"], call["args"], question)
+
         elapsed = time.time() - start
-
-        if "don't know" not in answer.lower():
-            # NEW: show the actual retrieved excerpt under each source, not just the filename -
-            # lets you see exactly what text grounded the answer.
-            for doc, score in scored:
-                with st.container(border=True):
-                    st.caption(f"📄 {doc.metadata['source']}")
-                    st.markdown(f"> {doc.page_content[:250]}...")
-        else:
-            cite_sources = []
-
         st.caption(f"⏱️ Answered in {elapsed:.2f}s")
 
-        with st.expander("Retrieval details (scores)"):
-            for doc, score in scored:
-                st.write(f"`{score:.4f}` — {doc.metadata['source']}")
+        if scored:
+            with st.expander("Retrieval details (scores)"):
+                for doc, score in scored:
+                    st.write(f"`{score:.4f}` — {doc.metadata['source']}")
+
     st.session_state.history.append((question, answer, cite_sources, scored, elapsed))
 
 # NEW: reserved here (before the sidebar) so its position in the main column is fixed early,
@@ -355,19 +534,25 @@ for question, answer, cite_sources, scored, elapsed in st.session_state.history:
                     st.caption(f"📄 {doc.metadata['source']}")
                     st.markdown(f"> {doc.page_content[:250]}...")
         st.caption(f"⏱️ Answered in {elapsed:.2f}s")
-        with st.expander("Retrieval details (scores)"):
-            for doc, score in scored:
-                st.write(f"`{score:.4f}` — {doc.metadata['source']}")
+        if scored:
+            with st.expander("Retrieval details (scores)"):
+                for doc, score in scored:
+                    st.write(f"`{score:.4f}` — {doc.metadata['source']}")
 
-# NEW: handle a suggestion-chip click here, at the top level of the script (not nested
-# inside any placeholder/column), so it's safe for handle_question() to render new
-# top-level chat messages.
-if st.session_state.get("pending_question"):
-    q = st.session_state.pending_question
-    st.session_state.pending_question = None
-    handle_question(q)
-
-question = st.chat_input("Ask a question about your documents...")
+# NEW: st.bottom pins its contents to the bottom of the page, same as chat_input - and a
+# selectbox (instead of radio buttons) renders as a compact dropdown, like ChatGPT's model
+# picker, sitting right next to the input instead of taking up a full row above it.
+with st.bottom:
+    mode_col, input_col = st.columns([1, 4], vertical_alignment="bottom")
+    with mode_col:
+        st.selectbox(
+            "Mode",
+            [MODE_AUTO, MODE_DOCS, MODE_CALC, MODE_TIME, MODE_DIRECT],
+            key="mode",
+            label_visibility="collapsed",
+        )
+    with input_col:
+        question = st.chat_input("Ask about your documents, do math, or ask the time...")
 if question:
     handle_question(question)
 
