@@ -223,6 +223,7 @@ async function syncFolder(folder) {
         );
         syncedFolders.add(folder);
         refreshFileList();
+        refreshStorage();
     } finally {
         syncInProgress = false;
         syncButton.disabled = false;
@@ -327,6 +328,7 @@ fileInput.addEventListener("change", async () => {
         setActiveTabButton();
         syncedFolders.add(currentFolder);
         refreshFileList();
+        refreshStorage();
     } catch (err) {
         hideSyncProgress();
         uploadingEl.remove();

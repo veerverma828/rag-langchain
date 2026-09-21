@@ -1,4 +1,6 @@
 #for llm
+import chromadb
+from chromadb.config import Settings
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_chroma import Chroma
 from langchain_core.prompts import ChatPromptTemplate
@@ -26,7 +28,10 @@ from fastapi.responses import FileResponse, StreamingResponse
 #main llm setup
 embeddings = OllamaEmbeddings(model="nomic-embed-text")
 llm = ChatOllama(model="qwen2.5-coder:7b")
-vector_store = Chroma(persist_directory="chroma_db", embedding_function=embeddings)
+# allow_reset=True enables client.reset() - the documented, official chromadb
+# API for wiping a database - used by the /clear endpoint below.
+chroma_client = chromadb.PersistentClient(path="chroma_db", settings=Settings(allow_reset=True))
+vector_store = Chroma(client=chroma_client, embedding_function=embeddings)
 
 record_manager = SQLRecordManager(namespace="rag_chain/docs", db_url="sqlite:///record_manager.db")
 record_manager.create_schema()
@@ -250,20 +255,48 @@ def get_folder_size_mb(path):
 
 @app.get("/storage")
 def storage():
-    chroma_mb = get_folder_size_mb("chroma_db")
+    # Report the size of the actual data stored (embeddings + document
+    # text), not the raw .sqlite3 file size on disk - a database file always
+    # has some fixed structural overhead even when empty, which made "0
+    # documents" confusingly show as a non-zero size before.
+    stored = vector_store.get(include=["documents", "embeddings"])
+    num_chunks = len(stored["ids"])
+    if num_chunks > 0 and stored["embeddings"] is not None and len(stored["embeddings"]) > 0:
+        dimension = len(stored["embeddings"][0])
+        vectors_bytes = num_chunks * dimension * 4  # float32 = 4 bytes each
+    else:
+        vectors_bytes = 0
+    text_bytes = sum(len(doc.encode("utf-8")) for doc in stored["documents"]) if stored["documents"] else 0
+    chroma_mb = (vectors_bytes + text_bytes) / (1024 * 1024)
+
     uploads_mb = get_folder_size_mb(UPLOAD_FOLDER)
     return {"chroma_mb": chroma_mb, "uploads_mb": uploads_mb, "total_mb": chroma_mb + uploads_mb}
 
 
 @app.post("/clear")
 def clear():
-    # the server keeps chroma_db and record_manager.db open the whole time it's
-    # running, so instead of deleting those files (which the CLI can safely do
-    # since it exits right after), we wipe their contents through their own
-    # APIs while staying up.
-    stored = vector_store.get()
-    if stored["ids"]:
-        vector_store.delete(ids=stored["ids"])
+    # the server keeps chroma_db and record_manager.db open the whole time
+    # it's running, so we wipe their contents through the libraries' own
+    # documented APIs, using the single shared client/connection the app
+    # already holds - never a second, separate connection to the same live
+    # file, which is what caused real data corruption when this was tried.
+    global vector_store
+
+    # reset() is chromadb's own official, documented API for fully wiping a
+    # database (requires allow_reset=True, set on chroma_client above).
+    chroma_client.reset()
+    vector_store = Chroma(client=chroma_client, embedding_function=embeddings)
+
+    # reset() clears the catalog but, on this chromadb version, doesn't
+    # reliably delete every collection's on-disk folder (data_level0.bin
+    # etc.) - clean up anything left behind that no longer matches a real,
+    # currently-registered collection. This only touches folders that are
+    # no longer referenced by any live collection, so it's safe.
+    valid_ids = {str(c.id) for c in chroma_client.list_collections()}
+    for entry in os.listdir("chroma_db"):
+        entry_path = os.path.join("chroma_db", entry)
+        if os.path.isdir(entry_path) and entry not in valid_ids:
+            shutil.rmtree(entry_path)
 
     keys = record_manager.list_keys()
     if keys:
