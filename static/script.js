@@ -213,7 +213,11 @@ async function syncFolder(folder) {
         syncingEl.remove();
 
         if (!finalMessage || finalMessage.type === "error") {
-            addMessage(finalMessage ? finalMessage.error : "Sync failed.", "system");
+            if (folder === "uploaded_docs") {
+                addMessage("You haven't uploaded any files yet - use the + button to add one.", "system");
+            } else {
+                addMessage(finalMessage ? finalMessage.error : "Sync failed.", "system");
+            }
             return;
         }
         const r = finalMessage.result;
