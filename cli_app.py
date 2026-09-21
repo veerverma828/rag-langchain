@@ -88,6 +88,17 @@ def get_folder_size_mb(path):
     return total_bytes / (1024 * 1024)
 
 
+def _with_embed_progress(chunks, batch_size):
+    """Yields chunks one at a time while printing progress every batch_size
+    chunks - index() consumes roughly one batch at a time, so this lines up
+    closely with how many chunks have actually been embedded so far."""
+    total = len(chunks)
+    for i, chunk in enumerate(chunks, start=1):
+        yield chunk
+        if i % batch_size == 0 or i == total:
+            print(f"Embedded {i} / {total} chunks", end="\r", flush=True)
+
+
 def sync_store(folder):
     filepaths = []
     for root, dirs, files in os.walk(folder):
@@ -119,14 +130,25 @@ def sync_store(folder):
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
     chunks = splitter.split_documents(all_docs)
 
-    result = index(chunks, record_manager, vector_store, cleanup="full", source_id_key="source", key_encoder="blake2b")
+    batch_size = 100
+    print(f"Embedding and indexing {len(chunks)} chunk(s) - this can take a while, please wait...")
+    result = index(
+        _with_embed_progress(chunks, batch_size),
+        record_manager,
+        vector_store,
+        batch_size=batch_size,
+        cleanup="full",
+        source_id_key="source",
+        key_encoder="blake2b",
+    )
+    print()  # move past the progress line
     return result, skipped
 
 
 def cmd_sync(folder):
     if not os.path.isdir(folder):
         print(f"Folder not found: {folder}")
-        return
+        return False
     result, skipped = sync_store(folder)
     print(f"Added: {result['num_added']}, Updated: {result['num_updated']}, "
           f"Skipped (unchanged): {result['num_skipped']}, Deleted: {result['num_deleted']}")
@@ -134,6 +156,7 @@ def cmd_sync(folder):
         print(f"{len(skipped)} file(s) skipped:")
         for msg in skipped:
             print(f"  - {msg}")
+    return True
 
 
 def cmd_files():
@@ -263,7 +286,7 @@ def run_tool(tool_name, args, question):
     return stream_print(llm, phrase_prompt)
 
 
-MODE_DOCS = "docs"
+MODE_DOCS = "rag"
 MODE_TOOL = "tool"
 MODE_DIRECT = "ai"
 MODES = [MODE_DOCS, MODE_TOOL, MODE_DIRECT]
@@ -299,7 +322,7 @@ def handle_question(question, mode, history):
 # ---------------------------------------------------------------------------
 HELP_TEXT = """
 Commands:
-  :mode <docs|tool|ai>                 switch answering mode (current: {mode})
+  :mode <rag|tool|ai>                  switch answering mode (current: {mode})
   :sync <folder>                       load/re-index documents from a folder (default: docs)
   :files                               list indexed files
   :open <filename>                     open an indexed file in its default app
@@ -315,13 +338,14 @@ Anything else you type is treated as a question to ask.
 """
 
 
-def run_command(cmd, arg, mode, history):
-    """Executes one ':command'. Returns the (possibly updated) mode, and an
-    action - None to keep going, 'exit' to quit, or 'reset' to start over."""
+def run_command(cmd, arg, mode, history, folder):
+    """Executes one ':command'. Returns the (possibly updated) mode and
+    folder, and an action - None to keep going, 'exit' to quit, or 'reset'
+    to start over."""
     if cmd in ("exit", "quit"):
-        return mode, "exit"
+        return mode, folder, "exit"
     elif cmd == "reset":
-        return mode, "reset"
+        return mode, folder, "reset"
     elif cmd == "help":
         print(HELP_TEXT.format(mode=mode))
     elif cmd == "mode":
@@ -331,7 +355,9 @@ def run_command(cmd, arg, mode, history):
         else:
             print(f"Unknown mode '{arg}'. Choose from: {', '.join(MODES)}")
     elif cmd == "sync":
-        cmd_sync(arg or "docs")
+        target = arg or "docs"
+        if cmd_sync(target):
+            folder = target
     elif cmd == "files":
         cmd_files()
     elif cmd == "open":
@@ -356,7 +382,7 @@ def run_command(cmd, arg, mode, history):
         cmd_clear()
     else:
         print(f"Unknown command: {cmd}. Type :help for the list.")
-    return mode, None
+    return mode, folder, None
 
 
 def run_session():
@@ -367,37 +393,40 @@ def run_session():
     print("Press h to show all commands.")
     mode = MODE_DOCS
     history = []
+    folder = None
 
     while True:
-        folder = input("Folder to sync now (default 'docs', blank to skip): ").strip()
-        if folder.lower() == "h":
+        typed = input("Folder to sync (e.g. 'docs'), blank to skip: ").strip()
+        if typed.lower() == "h":
             print(HELP_TEXT.format(mode=mode))
             continue
-        if folder.lower() == "reset":
+        if typed.lower() == "reset":
             return "reset"
-        if folder.startswith(":"):
-            parts = folder[1:].split(maxsplit=1)
+        if typed.startswith(":"):
+            parts = typed[1:].split(maxsplit=1)
             cmd = parts[0].lower()
             arg = parts[1] if len(parts) > 1 else ""
-            mode, action = run_command(cmd, arg, mode, history)
+            mode, folder, action = run_command(cmd, arg, mode, history, folder)
             if action:
                 return action
             if mode == MODE_TOOL:
                 print("Tool mode doesn't need documents - skipping folder sync.")
-                folder = "skip"
                 break
             continue
+        typed_folder = typed
         break
     if mode == MODE_TOOL:
         pass
-    elif folder and folder.lower() != "skip":
-        cmd_sync(folder)
-    elif not folder:
+    elif typed_folder and typed_folder.lower() != "skip":
+        if cmd_sync(typed_folder):
+            folder = typed_folder
+    elif not typed_folder:
         print("Skipping sync - using whatever was already indexed before.")
 
     while True:
+        folder_label = folder or "-"
         try:
-            line = input(f"[{mode}] You: ").strip()
+            line = input(f"[{mode}] [{folder_label}] You: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nExiting.")
             return "exit"
@@ -416,7 +445,7 @@ def run_session():
             parts = line[1:].split(maxsplit=1)
             cmd = parts[0].lower()
             arg = parts[1] if len(parts) > 1 else ""
-            mode, action = run_command(cmd, arg, mode, history)
+            mode, folder, action = run_command(cmd, arg, mode, history, folder)
             if action:
                 return action
             continue
