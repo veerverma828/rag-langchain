@@ -137,7 +137,7 @@ def sync_store(folder):
         record_manager,
         vector_store,
         batch_size=batch_size,
-        cleanup="full",
+        cleanup="scoped_full",
         source_id_key="source",
         key_encoder="blake2b",
     )

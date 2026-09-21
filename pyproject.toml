@@ -15,5 +15,6 @@ dependencies = [
     "langchain-community>=0.4.2",
     "langchain-ollama>=1.1.0",
     "pypdf>=6.19.0",
+    "python-multipart>=0.0.32",
     "uvicorn>=0.53.0",
 ]

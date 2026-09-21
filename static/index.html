@@ -11,21 +11,66 @@
 <body>
     <div class="app">
         <header class="app-header">
+            <button id="sidebar-toggle" class="icon-button" aria-label="Toggle files" title="Indexed files">&#9776;</button>
             <h1>Local RAG Chat</h1>
+            <button id="export-button" class="icon-button" aria-label="Export conversation" title="Export conversation">&#8595;</button>
         </header>
 
-        <main id="chat-window" class="chat-window"></main>
+        <div class="body-layout">
+            <aside id="sidebar" class="sidebar">
+                <div class="sidebar-tabs">
+                    <button class="tab-button active" id="tab-main" data-folder="docs">Main</button>
+                    <button class="tab-button" id="tab-uploaded" data-folder="uploaded_docs">Uploaded</button>
+                </div>
 
-        <form id="chat-form" class="chat-form">
-            <input type="text" id="question-input" class="chat-input" placeholder="Message..." autocomplete="off">
-            <button type="submit" id="send-button" class="send-button" aria-label="Send">
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="22" y1="2" x2="11" y2="13"></line>
-                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                </svg>
-            </button>
-        </form>
+                <div id="sync-progress" class="sync-progress hidden">
+                    <div class="sync-progress-track">
+                        <div id="sync-progress-fill" class="sync-progress-fill"></div>
+                    </div>
+                    <span id="sync-progress-label" class="sync-progress-label">0 / 0</span>
+                </div>
+
+                <ul id="file-list" class="file-list"></ul>
+
+                <div class="storage-info">
+                    <div class="storage-row"><span>Vector database</span><span id="storage-chroma">0.00 MB</span></div>
+                    <div class="storage-row"><span>Uploaded files</span><span id="storage-uploads">0.00 MB</span></div>
+                    <div class="storage-row total"><span>Total</span><span id="storage-total">0.00 MB</span></div>
+                    <button id="clear-button" class="clear-button">Clear all data</button>
+                </div>
+            </aside>
+
+            <div class="main-panel">
+                <main id="chat-window" class="chat-window"></main>
+
+                <div class="control-bar">
+                    <div class="mode-selector" id="mode-selector">
+                        <button id="mode-button" class="pill-button" title="Answering mode">rag</button>
+                        <ul id="mode-menu" class="mode-menu hidden">
+                            <li data-mode="rag" class="active">RAG</li>
+                            <li data-mode="tool">Tool</li>
+                            <li data-mode="ai">AI</li>
+                        </ul>
+                    </div>
+                    <span id="folder-display" class="folder-display" title="Click to edit folder">docs</span>
+                    <input type="text" id="folder-input" class="folder-input hidden" value="docs">
+                    <button id="sync-button" class="icon-button" title="Sync current folder">&#8635;</button>
+                </div>
+
+                <form id="chat-form" class="chat-form">
+                    <button type="button" id="upload-button" class="icon-button" aria-label="Add file" title="Add a file">&#43;</button>
+                    <input type="file" id="file-input" class="hidden" accept=".txt,.md,.pdf,.docx">
+                    <input type="text" id="question-input" class="chat-input" placeholder="Message..." autocomplete="off">
+                    <button type="submit" id="send-button" class="send-button" aria-label="Send">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </form>
+            </div>
+        </div>
     </div>
 
     <script src="/static/script.js"></script>
