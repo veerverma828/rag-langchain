@@ -105,6 +105,25 @@ def sync_store(folder):
         for filename in files:
             filepaths.append(os.path.join(root, filename))
 
+    # cleanup="scoped_full" (below) only cleans up sources it actually sees
+    # during this sync - a file deleted from disk is never walked, so its old
+    # chunks would otherwise be silently orphaned forever. Detect that case
+    # ourselves and remove just those chunks, scoped only to this folder.
+    stored = vector_store.get(include=["metadatas"])
+    existing_sources = {m["source"] for m in stored["metadatas"] if m["source"].startswith(folder)}
+    current_sources = set(filepaths)
+    deleted_sources = existing_sources - current_sources
+
+    num_removed_files = 0
+    if deleted_sources:
+        to_delete = vector_store.get(where={"source": {"$in": list(deleted_sources)}}, include=[])
+        if to_delete["ids"]:
+            vector_store.delete(ids=to_delete["ids"])
+        keys = record_manager.list_keys(group_ids=list(deleted_sources))
+        if keys:
+            record_manager.delete_keys(keys)
+        num_removed_files = len(deleted_sources)
+
     all_docs = []
     skipped = []
     for i, filepath in enumerate(filepaths):
@@ -142,6 +161,7 @@ def sync_store(folder):
         key_encoder="blake2b",
     )
     print()  # move past the progress line
+    result["num_deleted"] += num_removed_files
     return result, skipped
 
 

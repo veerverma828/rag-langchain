@@ -35,7 +35,7 @@ let currentMode = "rag";
 let currentFolder = "docs";
 const syncedFolders = new Set();
 
-function addMessage(text, kind, sources) {
+function addMessage(text, kind, sources, autoDismissMs) {
     const el = document.createElement("div");
     el.className = `message ${kind}`;
     el.textContent = text;
@@ -51,6 +51,11 @@ function addMessage(text, kind, sources) {
 
     chatWindow.appendChild(el);
     chatWindow.scrollTop = chatWindow.scrollHeight;
+
+    if (autoDismissMs) {
+        setTimeout(() => el.remove(), autoDismissMs);
+    }
+
     return el;
 }
 
@@ -218,12 +223,13 @@ async function syncFolder(folder) {
             } else {
                 addMessage(finalMessage ? finalMessage.error : "Sync failed.", "system");
             }
+            refreshFileList();
             return;
         }
         const r = finalMessage.result;
         addMessage(
             `Added: ${r.num_added}, Updated: ${r.num_updated}, Skipped: ${r.num_skipped}, Deleted: ${r.num_deleted}`,
-            "system"
+            "system", null, 5000
         );
         syncedFolders.add(folder);
         refreshFileList();
@@ -245,10 +251,19 @@ function setActiveTabButton() {
     });
 }
 
+function clearSystemMessages() {
+    chatWindow.querySelectorAll(".message.system").forEach((el) => el.remove());
+}
+
 async function setFolder(folder) {
+    clearSystemMessages();
     currentFolder = folder;
     folderDisplay.textContent = currentFolder;
     setActiveTabButton();
+
+    const locked = currentFolder === "uploaded_docs";
+    folderDisplay.classList.toggle("locked", locked);
+    folderDisplay.title = locked ? "Fixed upload folder" : "Click to edit folder";
 
     if (!syncedFolders.has(currentFolder)) {
         await syncFolder(currentFolder);
@@ -262,7 +277,10 @@ tabButtons.forEach((btn) => {
 });
 
 // ----- Folder display (click to edit directly) -----
+// "uploaded_docs" is a fixed system folder for the upload button's target,
+// not an arbitrary path the user should be able to retarget.
 folderDisplay.addEventListener("click", () => {
+    if (currentFolder === "uploaded_docs") return;
     folderDisplay.classList.add("hidden");
     folderInput.classList.remove("hidden");
     folderInput.value = currentFolder;
@@ -324,7 +342,7 @@ fileInput.addEventListener("change", async () => {
         const r = finalMessage.result;
         addMessage(
             `Added: ${r.num_added}, Updated: ${r.num_updated}, Skipped: ${r.num_skipped}, Deleted: ${r.num_deleted}`,
-            "system"
+            "system", null, 5000
         );
 
         currentFolder = "uploaded_docs";
@@ -361,7 +379,7 @@ clearButton.addEventListener("click", async () => {
     await fetch("/clear", { method: "POST" });
 
     syncedFolders.clear();
-    addMessage("All local data cleared.", "system");
+    addMessage("All local data cleared.", "system", null, 5000);
     refreshFileList();
     refreshStorage();
     clearButton.disabled = false;

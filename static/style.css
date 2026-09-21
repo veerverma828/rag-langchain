@@ -390,6 +390,15 @@ body {
     color: var(--text);
 }
 
+.folder-display.locked {
+    cursor: default;
+}
+
+.folder-display.locked:hover {
+    background: transparent;
+    color: var(--text-dim);
+}
+
 .folder-input {
     background: var(--surface);
     border: 1px solid var(--accent);
