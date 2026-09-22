@@ -16,6 +16,10 @@ const folderDisplay = document.getElementById("folder-display");
 const folderInput = document.getElementById("folder-input");
 const syncButton = document.getElementById("sync-button");
 
+const modelSelector = document.getElementById("model-selector");
+const modelButton = document.getElementById("model-button");
+const modelMenu = document.getElementById("model-menu");
+
 const exportButton = document.getElementById("export-button");
 
 const uploadButton = document.getElementById("upload-button");
@@ -33,6 +37,7 @@ const clearButton = document.getElementById("clear-button");
 const MODES = ["rag", "tool", "ai"];
 let currentMode = "rag";
 let currentFolder = "docs";
+let currentModel = "qwen2.5-coder:7b";
 const syncedFolders = new Set();
 
 function addMessage(text, kind, sources, autoDismissMs) {
@@ -76,13 +81,43 @@ chatForm.addEventListener("submit", async (event) => {
         const response = await fetch("/ask", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ question: question, mode: currentMode, folder: currentFolder })
+            body: JSON.stringify({ question: question, mode: currentMode, folder: currentFolder, model: currentModel })
         });
-        const data = await response.json();
+
         loadingEl.remove();
-        addMessage(data.answer, "ai", data.sources);
+        const answerEl = addMessage("", "ai");
+        let fullText = "";
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+
+            const lines = buffer.split("\n");
+            buffer = lines.pop(); // last entry may be an incomplete line - keep it for next time
+
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                const msg = JSON.parse(line);
+                if (msg.type === "token") {
+                    fullText += msg.content;
+                    answerEl.textContent = fullText;
+                    chatWindow.scrollTop = chatWindow.scrollHeight;
+                } else if (msg.type === "done" && msg.sources && msg.sources.length > 0) {
+                    const sourcesEl = document.createElement("div");
+                    sourcesEl.className = "sources";
+                    sourcesEl.innerHTML = msg.sources.map(s =>
+                        `<div class="source"><span class="source-name">${s.source}</span> <span class="source-score">${s.score.toFixed(4)}</span></div>`
+                    ).join("");
+                    answerEl.appendChild(sourcesEl);
+                }
+            }
+        }
     } catch (err) {
-        loadingEl.remove();
         addMessage("Something went wrong - please try again.", "ai");
     } finally {
         questionInput.disabled = false;
@@ -111,6 +146,55 @@ document.addEventListener("click", (event) => {
         modeMenu.classList.add("hidden");
     }
 });
+
+// ----- Model dropdown -----
+// Populated dynamically from Ollama's own installed-model list, so this
+// works with whatever models you have pulled rather than a hardcoded set.
+async function loadModels() {
+    try {
+        const response = await fetch("/models");
+        const data = await response.json();
+        const names = data.models || [];
+
+        if (names.length === 0) {
+            modelButton.textContent = currentModel;
+            return;
+        }
+        if (!names.includes(currentModel)) {
+            currentModel = names[0];
+        }
+        modelButton.textContent = currentModel;
+
+        modelMenu.innerHTML = "";
+        names.forEach((name) => {
+            const li = document.createElement("li");
+            li.textContent = name;
+            li.classList.toggle("active", name === currentModel);
+            li.addEventListener("click", () => {
+                currentModel = name;
+                modelButton.textContent = currentModel;
+                modelMenu.querySelectorAll("li").forEach((i) => i.classList.toggle("active", i === li));
+                modelMenu.classList.add("hidden");
+            });
+            modelMenu.appendChild(li);
+        });
+    } catch (err) {
+        modelButton.textContent = currentModel;
+    }
+}
+
+modelButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    modelMenu.classList.toggle("hidden");
+});
+
+document.addEventListener("click", (event) => {
+    if (!modelSelector.contains(event.target)) {
+        modelMenu.classList.add("hidden");
+    }
+});
+
+loadModels();
 
 // ----- Sidebar toggle -----
 sidebarToggle.addEventListener("click", () => {

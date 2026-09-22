@@ -333,6 +333,15 @@ body {
     transition: border-color 0.15s ease;
 }
 
+.model-button {
+    text-transform: none;
+    font-family: monospace;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .pill-button:hover {
     border-color: var(--accent);
 }
