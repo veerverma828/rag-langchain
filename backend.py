@@ -3,6 +3,7 @@ import chromadb
 from chromadb.config import Settings
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_chroma import Chroma
+from sentence_transformers import CrossEncoder
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.messages import HumanMessage, AIMessage
@@ -31,10 +32,19 @@ from fastapi.responses import FileResponse, StreamingResponse
 #main llm setup
 DEFAULT_MODEL = "qwen2.5-coder:7b"
 embeddings = OllamaEmbeddings(model="nomic-embed-text")
+# Cross-encoder reranker: scores each (question, chunk) pair together for
+# actual relevance, unlike embedding similarity which compares them
+# independently. Loaded once at startup, not via Ollama - Ollama has no
+# native reranking endpoint, so this uses the standard local Python approach.
+reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 # allow_reset=True enables client.reset() - the documented, official chromadb
 # API for wiping a database - used by the /clear endpoint below.
 chroma_client = chromadb.PersistentClient(path="chroma_db", settings=Settings(allow_reset=True))
-vector_store = Chroma(client=chroma_client, embedding_function=embeddings)
+# cosine matches how nomic-embed-text (like most text embedding models) was
+# actually trained, unlike Chroma's raw-distance default ("l2") - this only
+# takes effect on a freshly created collection, so an existing chroma_db
+# needs a /clear + re-sync to actually pick it up.
+vector_store = Chroma(client=chroma_client, embedding_function=embeddings, collection_metadata={"hnsw:space": "cosine"})
 
 record_manager = SQLRecordManager(namespace="rag_chain/docs", db_url="sqlite:///record_manager.db")
 record_manager.create_schema()
@@ -238,64 +248,86 @@ def stream_tokens(chunks, sources, question=None):
     yield json.dumps({"type": "done", "sources": sources}) + "\n"
 
 
+def status(text):
+    return json.dumps({"type": "status", "content": text}) + "\n"
+
+
 @app.post("/ask")
 def ask(q: Question):
     llm = get_llm(q.model)
 
     if q.mode == "ai":
-        messages = conversation_history + [HumanMessage(content=q.question)]
-        return StreamingResponse(
-            stream_tokens(llm.stream(messages), [], question=q.question), media_type="application/x-ndjson"
-        )
+        def ai_stream():
+            messages = conversation_history + [HumanMessage(content=q.question)]
+            yield from stream_tokens(llm.stream(messages), [], question=q.question)
+        return StreamingResponse(ai_stream(), media_type="application/x-ndjson")
 
     if q.mode == "tool":
-        tool_llm = get_tool_llm(q.model)
-        decision = tool_llm.invoke([{"role": "user", "content": q.question}])
-        if not decision.tool_calls:
-            def no_tool():
+        def tool_stream():
+            tool_llm = get_tool_llm(q.model)
+            yield status("Deciding which tool to use...")
+            decision = tool_llm.invoke([{"role": "user", "content": q.question}])
+            if not decision.tool_calls:
                 yield json.dumps({"type": "token", "content": "Couldn't tell whether that needs the calculator or the clock."}) + "\n"
                 yield json.dumps({"type": "done", "sources": []}) + "\n"
-            return StreamingResponse(no_tool(), media_type="application/x-ndjson")
+                return
 
-        call = decision.tool_calls[0]
-        tool_fn = agent_tools_by_name[call["name"]]
-        result = tool_fn.invoke(call["args"])
-        if result.startswith("TOOL ERROR"):
-            def tool_err():
+            call = decision.tool_calls[0]
+            tool_fn = agent_tools_by_name[call["name"]]
+            yield status(f"Running {call['name']}...")
+            result = tool_fn.invoke(call["args"])
+            if result.startswith("TOOL ERROR"):
                 yield json.dumps({"type": "token", "content": f"Tool failed: {result}"}) + "\n"
                 yield json.dumps({"type": "done", "sources": []}) + "\n"
-            return StreamingResponse(tool_err(), media_type="application/x-ndjson")
+                return
 
-        phrase_prompt = (
-            f"Question: {q.question}\nTool result: {result}\n\n"
-            f"Answer the question naturally using this result, in one short sentence."
-        )
-        messages = conversation_history + [HumanMessage(content=phrase_prompt)]
-        return StreamingResponse(
-            stream_tokens(llm.stream(messages), [], question=q.question), media_type="application/x-ndjson"
-        )
+            phrase_prompt = (
+                f"Question: {q.question}\nTool result: {result}\n\n"
+                f"Answer the question naturally using this result, in one short sentence."
+            )
+            yield status("Answering...")
+            messages = conversation_history + [HumanMessage(content=phrase_prompt)]
+            yield from stream_tokens(llm.stream(messages), [], question=q.question)
+        return StreamingResponse(tool_stream(), media_type="application/x-ndjson")
 
-    # rag mode - Chroma can't filter by "starts with" natively, so fetch extra
-    # candidates and filter down to the selected folder in Python
-    candidates = vector_store.similarity_search_with_score(q.question, k=10)
-    if q.folder:
-        candidates = [(doc, score) for doc, score in candidates if doc.metadata["source"].startswith(q.folder)]
-    scored = candidates[:2]
-    docs = [doc for doc, score in scored]
-    context = "\n\n".join(doc.page_content for doc in docs)
+    # rag mode
+    def rag_stream():
+        yield status("Searching documents...")
+        # Chroma can't filter by "starts with" natively, so fetch extra
+        # candidates and filter down to the selected folder in Python
+        candidates = vector_store.similarity_search_with_score(q.question, k=10)
+        if q.folder:
+            candidates = [(doc, score) for doc, score in candidates if doc.metadata["source"].startswith(q.folder)]
 
-    sources = [
-        {"source": doc.metadata["source"], "score": score, "preview": doc.page_content[:200]}
-        for doc, score in scored
-    ]
-    generation_chain = prompt | llm | StrOutputParser()
-    return StreamingResponse(
-        stream_tokens(
+        # Rerank: embedding distance is a cheap first pass, but comparing the
+        # question and each chunk independently misses a lot of nuance. The
+        # cross-encoder scores them together instead, so the final top-2
+        # picked here is by actual relevance, not just vector proximity -
+        # note this score is "higher is better", the opposite of the
+        # distance scores above.
+        docs_only = [doc for doc, _ in candidates]
+        if docs_only:
+            yield status("Reranking results...")
+            pairs = [(q.question, doc.page_content) for doc in docs_only]
+            rerank_scores = reranker.predict(pairs)
+            scored = sorted(zip(docs_only, rerank_scores), key=lambda x: x[1], reverse=True)[:2]
+        else:
+            scored = []
+
+        docs = [doc for doc, score in scored]
+        context = "\n\n".join(doc.page_content for doc in docs)
+
+        sources = [
+            {"source": doc.metadata["source"], "score": float(score), "preview": doc.page_content[:200]}
+            for doc, score in scored
+        ]
+        yield status("Generating answer...")
+        generation_chain = prompt | llm | StrOutputParser()
+        yield from stream_tokens(
             generation_chain.stream({"context": context, "question": q.question, "history": conversation_history}),
             sources, question=q.question
-        ),
-        media_type="application/x-ndjson"
-    )
+        )
+    return StreamingResponse(rag_stream(), media_type="application/x-ndjson")
 
 
 class SyncRequest(BaseModel):
@@ -385,7 +417,7 @@ def clear():
     # reset() is chromadb's own official, documented API for fully wiping a
     # database (requires allow_reset=True, set on chroma_client above).
     chroma_client.reset()
-    vector_store = Chroma(client=chroma_client, embedding_function=embeddings)
+    vector_store = Chroma(client=chroma_client, embedding_function=embeddings, collection_metadata={"hnsw:space": "cosine"})
 
     # reset() clears the catalog but, on this chromadb version, doesn't
     # reliably delete every collection's on-disk folder (data_level0.bin

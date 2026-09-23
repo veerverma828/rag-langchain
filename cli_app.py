@@ -22,7 +22,7 @@ from langchain_classic.indexes import SQLRecordManager, index
 # ---------------------------------------------------------------------------
 embeddings = OllamaEmbeddings(model="nomic-embed-text")
 llm = ChatOllama(model="qwen2.5-coder:7b")
-vector_store = Chroma(persist_directory="chroma_db", embedding_function=embeddings)
+vector_store = Chroma(persist_directory="chroma_db", embedding_function=embeddings, collection_metadata={"hnsw:space": "cosine"})
 
 record_manager = SQLRecordManager(namespace="rag_chain/docs", db_url="sqlite:///record_manager.db")
 record_manager.create_schema()

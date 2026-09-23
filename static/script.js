@@ -2,6 +2,8 @@ const chatWindow = document.getElementById("chat-window");
 const questionInput = document.getElementById("question-input");
 const chatForm = document.getElementById("chat-form");
 const sendButton = document.getElementById("send-button");
+const sendIcon = document.getElementById("send-icon");
+const stopIcon = document.getElementById("stop-icon");
 
 const sidebar = document.getElementById("sidebar");
 const sidebarToggle = document.getElementById("sidebar-toggle");
@@ -40,6 +42,16 @@ let currentFolder = "docs";
 let currentModel = "qwen2.5-coder:7b";
 const syncedFolders = new Set();
 
+let isGenerating = false;
+let abortController = null;
+
+function setGeneratingState(active) {
+    isGenerating = active;
+    sendIcon.classList.toggle("hidden", active);
+    stopIcon.classList.toggle("hidden", !active);
+    sendButton.title = active ? "Stop generating" : "Send";
+}
+
 function addMessage(text, kind, sources, autoDismissMs) {
     const el = document.createElement("div");
     el.className = `message ${kind}`;
@@ -65,27 +77,37 @@ function addMessage(text, kind, sources, autoDismissMs) {
 }
 
 // ----- Chat -----
+sendButton.addEventListener("click", (event) => {
+    if (isGenerating) {
+        event.preventDefault();
+        abortController.abort();
+    }
+});
+
 chatForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (isGenerating) return;
     const question = questionInput.value.trim();
     if (!question) return;
 
     addMessage(question, "user");
     questionInput.value = "";
     questionInput.disabled = true;
-    sendButton.disabled = true;
+
+    abortController = new AbortController();
+    setGeneratingState(true);
 
     const loadingEl = addMessage("Thinking...", "loading");
+    let answerEl = null;
 
     try {
         const response = await fetch("/ask", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ question: question, mode: currentMode, folder: currentFolder, model: currentModel })
+            body: JSON.stringify({ question: question, mode: currentMode, folder: currentFolder, model: currentModel }),
+            signal: abortController.signal
         });
 
-        loadingEl.remove();
-        const answerEl = addMessage("", "ai");
         let fullText = "";
 
         const reader = response.body.getReader();
@@ -103,11 +125,21 @@ chatForm.addEventListener("submit", async (event) => {
             for (const line of lines) {
                 if (!line.trim()) continue;
                 const msg = JSON.parse(line);
-                if (msg.type === "token") {
+                if (msg.type === "status") {
+                    loadingEl.textContent = msg.content;
+                } else if (msg.type === "token") {
+                    if (!answerEl) {
+                        loadingEl.remove();
+                        answerEl = addMessage("", "ai");
+                    }
                     fullText += msg.content;
                     answerEl.textContent = fullText;
                     chatWindow.scrollTop = chatWindow.scrollHeight;
                 } else if (msg.type === "done" && msg.sources && msg.sources.length > 0) {
+                    if (!answerEl) {
+                        loadingEl.remove();
+                        answerEl = addMessage("", "ai");
+                    }
                     const sourcesEl = document.createElement("div");
                     sourcesEl.className = "sources";
                     sourcesEl.innerHTML = msg.sources.map(s =>
@@ -118,11 +150,18 @@ chatForm.addEventListener("submit", async (event) => {
             }
         }
     } catch (err) {
-        addMessage("Something went wrong - please try again.", "ai");
+        if (err.name === "AbortError") {
+            if (loadingEl.isConnected) loadingEl.remove();
+            if (answerEl && !answerEl.textContent) answerEl.remove();
+        } else {
+            loadingEl.remove();
+            addMessage("Something went wrong - please try again.", "ai");
+        }
     } finally {
+        setGeneratingState(false);
         questionInput.disabled = false;
-        sendButton.disabled = false;
         questionInput.focus();
+        abortController = null;
     }
 });
 

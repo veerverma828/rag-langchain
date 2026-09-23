@@ -65,11 +65,14 @@
                     <button type="button" id="upload-button" class="icon-button" aria-label="Add file" title="Add a file">&#43;</button>
                     <input type="file" id="file-input" class="hidden" accept=".txt,.md,.pdf,.docx">
                     <input type="text" id="question-input" class="chat-input" placeholder="Message..." autocomplete="off">
-                    <button type="submit" id="send-button" class="send-button" aria-label="Send">
-                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
+                    <button type="submit" id="send-button" class="send-button" aria-label="Send" title="Send">
+                        <svg id="send-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
                             stroke-linecap="round" stroke-linejoin="round">
                             <line x1="22" y1="2" x2="11" y2="13"></line>
                             <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                        <svg id="stop-icon" class="hidden" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                            <rect x="5" y="5" width="14" height="14" rx="2"></rect>
                         </svg>
                     </button>
                 </form>
