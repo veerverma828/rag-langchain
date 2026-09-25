@@ -10,6 +10,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 #for tool mode
 import datetime
 from langchain_core.tools import tool
+from ddgs import DDGS
 #for syncing documents
 import os
 import json
@@ -90,7 +91,21 @@ def get_current_time() -> str:
     """Get the current date and time."""
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-agent_tools_by_name = {calculate.name: calculate, get_current_time.name: get_current_time}
+@tool
+def web_search(query: str) -> str:
+    """Search the web for current information, recent events, news, or facts
+    that would not be in the user's own documents. Do NOT use it for math
+    or for the current date/time."""
+    try:
+        results = DDGS().text(query, max_results=5)
+    except Exception as e:
+        return f"TOOL ERROR: web search failed: {e}"
+    if not results:
+        return "TOOL ERROR: no results found for that search."
+    return "\n\n".join(f"{r['title']}\n{r['body']}\n{r['href']}" for r in results)
+
+tools = [calculate, get_current_time, web_search]
+agent_tools_by_name = {t.name: t for t in tools}
 
 # The generation model is now chosen per-request from whatever the user picks
 # in the UI, instead of being fixed at startup. ChatOllama clients are cheap
@@ -106,9 +121,7 @@ def get_llm(model_name):
 
 def get_tool_llm(model_name):
     if model_name not in _tool_llm_cache:
-        _tool_llm_cache[model_name] = ChatOllama(model=model_name, temperature=0).bind_tools(
-            [calculate, get_current_time]
-        )
+        _tool_llm_cache[model_name] = ChatOllama(model=model_name, temperature=0).bind_tools(tools)
     return _tool_llm_cache[model_name]
 
 
@@ -283,7 +296,7 @@ def ask(q: Question):
 
             phrase_prompt = (
                 f"Question: {q.question}\nTool result: {result}\n\n"
-                f"Answer the question naturally using this result, in one short sentence."
+                f"Answer the question naturally using only this result, in 1-3 short sentences."
             )
             yield status("Answering...")
             messages = conversation_history + [HumanMessage(content=phrase_prompt)]
