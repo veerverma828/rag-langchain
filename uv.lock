@@ -2787,7 +2787,7 @@ wheels = [
 ]
 
 [[package]]
-name = "rag-langchain"
+name = "querywise"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

@@ -1,5 +1,5 @@
 [project]
-name = "rag-langchain"
+name = "querywise"
 version = "0.1.0"
 description = "Add your description here"
 authors = [

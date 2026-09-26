@@ -1,0 +1,43 @@
+[
+  {
+    "question": "Who designed the Python programming language?",
+    "expected_source": "Python_(programming_language).pdf",
+    "expected_facts": ["Guido van Rossum"]
+  },
+  {
+    "question": "Where does the name Python come from?",
+    "expected_source": "Python_(programming_language).pdf",
+    "expected_facts": ["Monty Python"]
+  },
+  {
+    "question": "Who developed The Walking Dead TV series?",
+    "expected_source": "The_Walking_Dead_(TV_series).pdf",
+    "expected_facts": ["Frank Darabont"]
+  },
+  {
+    "question": "On what date did The Walking Dead premiere?",
+    "expected_source": "The_Walking_Dead_(TV_series).pdf",
+    "expected_facts": ["October 31, 2010"]
+  },
+  {
+    "question": "How many episodes did The Walking Dead have in total?",
+    "expected_source": "The_Walking_Dead_(TV_series).pdf",
+    "expected_facts": ["177"]
+  },
+  {
+    "question": "Who narrated the Bhagavad-Gita discourse to the blind king?",
+    "expected_source": "bhagavad-gita-in-english-source-file.pdf",
+    "expected_facts": ["Sanjaya"]
+  },
+  {
+    "question": "What does the word Bhagavad-Gita mean?",
+    "expected_source": "bhagavad-gita-in-english-source-file.pdf",
+    "expected_facts": ["Song of God", "Celestial Song"]
+  },
+  {
+    "question": "What is the capital city of Mars?",
+    "expected_source": null,
+    "expected_facts": [],
+    "should_refuse": true
+  }
+]
